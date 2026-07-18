@@ -1,0 +1,10 @@
+[project]
+name = "bai-invoice-extraction"
+version = "0.1.0"
+description = "Internal invoice extraction tool for finance"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+]
