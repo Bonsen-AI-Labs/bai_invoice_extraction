@@ -75,7 +75,8 @@ class LLMClient:
         ]
         resp = await self._client.chat.completions.create(
             model=self._model,
-            temperature=0,
+            # ponytail: gpt-5-mini only supports the default temperature (1);
+            # determinism now leans on the strict-JSON schema, not temp=0.
             response_format={"type": "json_object"},
             messages=messages,
         )

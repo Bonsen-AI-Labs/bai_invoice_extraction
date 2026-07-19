@@ -1,7 +1,15 @@
-from pydantic_settings import BaseSettings
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Observability
+    LOG_LEVEL:Literal["INFO", "ERROR", "DEBUG"] = "INFO"
+    ENVIRONMENT: Literal["dev", "local"] = "local"
+
     # Application
     APPLICATION_CLIENT_ID: str
     APPLICATION_CLIENT_SECRET: str
