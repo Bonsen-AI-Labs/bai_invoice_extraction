@@ -7,4 +7,10 @@ requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
+    "httpx>=0.28",
+    "msal>=1.31",
+    "azure-ai-documentintelligence>=1.0",
+    "azure-cosmos>=4.9",
+    "pymupdf>=1.24",
+    "openai>=1.60",
 ]

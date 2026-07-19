@@ -2,85 +2,91 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status
+## Two documents, two scopes
 
-Early-stage scaffold. Most `src/` modules are intentionally empty stubs. The
-full design is in **`TECHNICAL_REQUIREMENTS.md`** — that document is
-authoritative; read it before implementing anything non-trivial. This file only
-captures the cross-cutting invariants that are easy to violate while working in
-a single module.
+- **`TECHNICAL_REQUIREMENTS.md`** is the full multi-phase design (SharePoint → DI →
+  6-layer extraction → templates → Cosmos + workbook, with Blob staging, cron, and a
+  learning loop). Read it for the *why* behind a mechanism; its `§` sections are cited
+  throughout the code.
+- **This file describes what is actually built: Phase 1.** Phase 1 deliberately
+  implements a narrower slice, and in places *contradicts* the design doc (see
+  "Phase-1 deviations"). When the code and the design doc disagree, the code is Phase 1
+  and that is intentional.
 
-The root `main.py` is a hello-world entrypoint. `src/main.py` is copy-pasted
-Azure Document Intelligence quickstart sample code — reference material, not the
-real implementation.
+## What Phase 1 does
 
-## What this is
+Extract a fixed 18-field header schema from Indian GST invoice PDFs in a SharePoint
+folder, write each row to a master Excel workbook, and record execution history in
+Cosmos. One manual pass per run:
 
-A Python cron pipeline that extracts a fixed 18-field header schema from scanned
-Indian GST invoice PDFs dropped in SharePoint, writes results to a master Excel
-workbook, and keeps Cosmos DB as the system of record. Flow (design §3.1):
+`SharePoint list → SHA-256 gate → download → Azure DI → parse + segment → extract
+(L1/L2/L3 → fuse → validate → vision-LLM arbitration) → soft-dup vs Excel → Excel
+upsert → Cosmos history`
 
-`SharePoint → hash-dedup → Blob staging → PyMuPDF render → Azure Document
-Intelligence → segment into logical invoices → template lookup → 6-layer
-extraction → deterministic validation → conditional vision-LLM arbitration →
-Cosmos + workbook → template learning`
-
-Build order is staged — see design §16.1. Start with the L1-only skeleton
-(ingest → DI → Cosmos → workbook append); layers, templates, and the learning
-loop come later.
-
-## Load-bearing invariants (span multiple files — don't break in isolation)
-
-- **Cosmos is the source of truth; the workbook is a regenerable view.** Never
-  treat the workbook as authoritative.
-- **Pay for DI once.** Write both raw DI JSON responses to Blob *before* parsing
-  (§6.1). Retries resume from the persisted stage and re-read DI from Blob —
-  never re-purchase it. Per-file state machine in §3.2.
-- **Eval ID is deterministic**: `EVL-<sha256(bytes)[:12]>-<NN>` (§11.4). This is
-  what makes the pipeline idempotent — reprocessing upserts the same Cosmos
-  docs and workbook rows. Everything is upsert, never blind insert.
-- **Never invent field values.** No candidate → null + NeedsReview. Validation
-  outranks the LLM; the LLM outranks nothing that breaks a satisfied check
-  (§8.8, §9.5).
-- **Templates are priors, never ground truth** (§7.6, §10.7). They only update
-  from *confirmed* extractions (V-ARITH pass / human-approved / LLM-high-conf +
-  consistent). Unvalidated guesses must never teach a template.
-- **Coordinate space, not image space.** DI polygons for PDF input are in
-  **inches**, origin top-left (§6.3). Deskew/rotation is done on coordinates;
-  the render used for LLM crops is never geometrically altered (§5.3). Every
-  stored polygon keeps `(page, unit, pageWidth, pageHeight)` alongside it.
-- **Human corrections live in separate `Corr_*` columns.** The cron writes
-  Extracted/Operational and never touches human columns; the (predicted,
-  corrected) pair is eval data + template signal — never overwrite it (§12.2).
-- **All tunable constants live in the versioned `_GLOBAL/config` Cosmos doc**
-  (§18.1), not scattered literals. Each invoice records the config versions it
-  used.
+Entrypoint: `uv run python -m src.main` (`src/pipeline/runner.py::run`).
 
 ## Commands
 
-Managed with [uv](https://docs.astral.sh/uv/) (see `uv.lock`). Requires Python 3.14.
+Managed with [uv](https://docs.astral.sh/uv/); Python 3.14.
 
 ```bash
-uv sync                 # install/resolve dependencies
-uv run python main.py   # run root entrypoint
+uv sync                          # install/resolve dependencies
+uv run python -m src.main        # run one pipeline pass (needs live creds + env)
+uv run ruff check src            # lint  (must stay clean)
+uv run pyright src               # type-check (must stay clean: 0 errors)
 ```
 
-No test suite or linter is configured yet.
+No pytest suite. Non-trivial pure logic carries an assert-based `_demo()` under
+`if __name__ == "__main__":` — run them directly:
 
-## Module map (`src/` → design section)
+```bash
+uv run python -m src.utils.text          # GSTIN checksum, fuzzy anchors, value parsing
+uv run python -m src.utils.render        # polygon→pixel crop math
+uv run python -m src.extraction.client   # combinatorial V-ARITH winner selection
+```
 
-- `services/sharepoint.py` — Graph API listing/download + workbook table writes (§4, §12).
-- `services/ocr.py` — Azure Document Intelligence pass, `prebuilt-invoice` + `prebuilt-layout` (§6).
-- `services/cosmos.py` — three containers: `invoices` (pk `/vendorKey`), `runs` (pk `/yearMonth`), `templates` (pk `/vendorKey`, also holds `_GLOBAL/config`) (§11.1).
-- `services/http.py` — shared async HTTP client; other service clients build on it.
-- `parsing/client.py` — DI JSON → grouped blocks/tables (§5, §7.5).
-- `extraction/client.py` — the 6-layer engine (L1–L6), fusion, validation, arbitration (§7–§9).
-- `template_generation/` — fingerprinting, matching, injection (L6), learning (§10).
-- `models.py` — Pydantic domain models (candidate, invoice doc, template doc — canonical shapes in §7.2, §10.4, §11.2).
-- `env.py` — `Settings(BaseSettings)`; secrets from env (`DOC_INTEL_ENDPOINT`, `DOC_INTEL_KEY`). Runtime *tunables* go in the Cosmos `_GLOBAL/config` doc, not here.
+Add a self-check like these when you write new non-trivial logic; don't add a test framework.
 
-## Config split
+## Architecture: client-based isolation
 
-Two distinct config surfaces — don't conflate them:
-- **`src/env.py` (Pydantic Settings, from env)** — secrets and connection info only. Never hardcode endpoints/keys (the Azure sample in `src/main.py` does; don't copy it).
-- **Cosmos `_GLOBAL/config` (versioned)** — anchor lexicon, fusion weights, thresholds, all §18.1 constants. Changing these is auditable and gated on eval deltas (§16.2).
+The core rule of this repo. Each backend has exactly one client under `src/services/`
+that exposes a public async surface; **pipeline / parsing / extraction code calls those
+methods and never touches a backend SDK or HTTP directly.**
+
+- `services/http.py` — async httpx + MSAL. Owns Microsoft Graph token acquisition/caching/retry. `graph()`, `graph_json()`, `download()`.
+- `services/sharepoint.py` — Graph file listing/download (via `HTTPClient`). Resolves the folder share URL to a drive/item.
+- `services/excel.py` — Graph **workbook table** API (via `HTTPClient`). `read_rows()`, `find_row()`, `upsert_row()`, `add_failure()`. Table-object ops so writes survive user sorting.
+- `services/ocr.py` — Azure Document Intelligence SDK. `analyze_invoice()` runs `prebuilt-invoice` + `prebuilt-layout`, returns a `DIResult`.
+- `services/cosmos.py` — Cosmos SDK, **single history container only**. `is_processed()` (dedup gate), `record_history()`, `find_identity()`.
+- `services/llm.py` — OpenAI vision SDK. `arbitrate()` — strict-JSON, temperature 0, one call per invoice.
+
+The engine:
+- `parsing/client.py` — `parse(DIResult) → ParsedDocument` (grouped blocks, §5.4) and `segment(...) → [LogicalInvoice]` (§5.5, uses DI document boundaries; raises `SegmentationError` when ambiguous → pipeline parks the file).
+- `extraction/client.py` — `Extractor.extract(inv, pdf, eval_id, path) → InvoiceRecord`. Candidate generation L1 (DI) / L2 (anchors) / L3 (patterns) → merge (§7.3) → fusion (§7.6) → deterministic validation (§8) → accept/dispute rule (§7.7) → LLM arbitration on disputed fields only (§9).
+- `models.py` — Pydantic shapes (`Candidate` §7.2, `FieldResult`, `InvoiceRecord`, `HistoryDoc`).
+- `config.py` — Phase-1 tunable constants + anchor lexicon (§18.1/§18.2).
+
+## Load-bearing invariants (span files — don't break in one module)
+
+- **Never invent a value.** No candidate → field is `null` + `NeedsReview`. Deterministic validation (§8) outranks the LLM; the LLM may not override a checksum-valid GSTIN or newly break a satisfied V-ARITH (§9.5, enforced in `extraction/client.py::_arbitrate`).
+- **Eval ID is deterministic** — `EVL-<sha256(bytes)[:12]>-<NN>` per logical invoice (§11.4). This is what makes re-runs idempotent: same bytes → same Eval ID → Excel `upsert_row` and Cosmos upsert overwrite in place. Never blind-insert.
+- **Coordinate space, not image space.** DI polygons for PDF input are in **inches**, origin top-left (§6.3). Crops (`utils/render.py`) are cut by pixel box = inches × DPI; the raster is never rotated (§5.3).
+- **Human `Corr_*` columns are off-limits.** The pipeline writes only Identity/Extracted/Operational columns (`InvoiceRecord.workbook_row()`); the (predicted, corrected) pair keyed by Eval ID is the future eval/training signal (§12.2).
+- **Absolute imports only** — `from src.x import ...`, never relative (`from ..x`). Consistent across the tree.
+- **`ruff` and `pyright` must both stay clean.** Prefer real types over `cast`/`# type: ignore`; the one standing ignore is `Settings()  # type: ignore[call-arg]` (pydantic-settings loads fields from env).
+
+## Phase-1 deviations from the design doc
+
+These are intentional and will change in later phases — do not "fix" them toward the design doc without a scope decision:
+
+- **Cosmos stores execution history only** (single `COSMOS_HISTORY_CONTAINER`). The design's "Cosmos is source of truth, workbook is a regenerable view" does **not** hold: the **master Excel workbook is the de-facto store of extracted values**. No `invoices`/`templates` containers.
+- **No Blob staging / no resume.** The design's "pay for DI once, persist-before-parse, resume-from-stage" is out — a retry re-runs the whole file (renders are in-memory only).
+- **No template system (L6) or learning.** Extraction is L1/L2/L3 + validation + LLM only. `src/template_generation/` is an empty placeholder.
+- **Tunable constants live in `src/config.py`**, not the Cosmos `_GLOBAL/config` doc.
+- **No cron/lock** — a single manual pass. Biller-vs-payee GSTIN role resolution and rate-derived tax amounts are heuristic; such simplifications are marked with `ponytail:` comments.
+
+## Config surfaces (don't conflate)
+
+- **`src/env.py`** (`Settings(BaseSettings)`, from env) — secrets and connection info only: Graph app creds (`APPLICATION_CLIENT_ID/SECRET/TENANT_ID`), Cosmos, DI, SharePoint folder + master Excel URLs, `OPENAI_API_KEY`.
+- **`src/config.py`** — extraction tunables and the anchor lexicon.
+- The OpenAI vision model id is `OPENAI_VISION_MODEL` in `config.py` (override via the env var of the same name); confirm the exact id for the account before a live run.

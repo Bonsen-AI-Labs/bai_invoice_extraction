@@ -1,9 +1,11 @@
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     # Application
     APPLICATION_CLIENT_ID: str
     APPLICATION_CLIENT_SECRET: str
+    APPLICATION_TENANT_ID: str
 
     # Cosmos DB
     COSMOS_ENDPOINT: str
@@ -18,3 +20,8 @@ class Settings(BaseSettings):
     # Sharepoint
     SHAREPOINT_FOLDER_URL: str
     MASTER_EXCEL_DOCUMENT_URL: str
+
+    # Azure OpenAI
+    # AZURE_OPENAI_API_ENDPOINT: str
+    # AZURE_OPENAI_API_KEY: str
+    OPENAI_API_KEY: str
