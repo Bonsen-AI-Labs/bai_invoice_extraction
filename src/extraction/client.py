@@ -44,18 +44,26 @@ _FY_RE = re.compile(r"(\d{2})\s*[-/]\s*(\d{2})")  # e.g. 25-26 in a bill number
 
 
 class Extractor:
-    def __init__(self, llm=None):
+    def __init__(self, llm=None, templates=None):
         self._llm = llm  # LLMClient or None (arbitration skipped if None)
+        self._templates = templates  # TemplateEngine or None
 
     async def extract(
         self, inv: LogicalInvoice, pdf_bytes: bytes, eval_id: str, file_path: str
     ) -> InvoiceRecord:
-        cands = _l1(inv) + _l2(inv) + _l3(inv)
+        template_match, l6 = (
+            self._templates.propose(inv) if self._templates is not None else (None, [])
+        )
+        cands = _l1(inv) + _l2(inv) + _l3(inv) + l6
         by_field = _merge(cands)
 
         rec = InvoiceRecord(
             eval_id=eval_id, file_path=file_path, page_range=inv.page_range
         )
+        if template_match is not None:
+            rec.template_id = template_match.template_id
+            rec.template_score = template_match.score
+            rec.template_verdict = template_match.verdict
         for c in by_field.values():
             for cand in c:
                 cand.fused_score = _fuse(cand)
@@ -206,7 +214,9 @@ def _di_value(f, kind) -> tuple[Any, str]:
         return (getattr(f, "value_string", None) or content or None), content
     if kind == "date":
         d = getattr(f, "value_date", None)
-        return (d.isoformat() if d else parse_date(content)), content
+        isoformat = getattr(d, "isoformat", None)
+        value = isoformat() if callable(isoformat) else parse_date(str(d or content))
+        return value, content
     if kind == "amount":
         cur = getattr(f, "value_currency", None)
         if cur is not None and getattr(cur, "amount", None) is not None:
@@ -425,8 +435,16 @@ def _same(a: Candidate, b: Candidate) -> bool:
 
 
 def _fuse(c: Candidate) -> float:
-    num = sum(LAYER_WEIGHTS.get(layer, 0.05) * s for layer, s in c.layers.items())
-    den = sum(LAYER_WEIGHTS.get(layer, 0.05) for layer in c.layers) or 1.0
+    weights = {
+        layer: (
+            float(c.evidence.get("l6_weight", 0.0))
+            if layer == "L6"
+            else LAYER_WEIGHTS.get(layer, 0.05)
+        )
+        for layer in c.layers
+    }
+    num = sum(weights[layer] * score for layer, score in c.layers.items())
+    den = sum(weights.values()) or 1.0
     return num / den
 
 
@@ -553,7 +571,7 @@ def _fy_violation(by_field) -> bool:
         return False
     try:
         year = int(d.value[:4])
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     fy_start = 2000 + int(m.group(1))
     # Indian FY: Apr(start year)–Mar(start+1). Accept either calendar year.

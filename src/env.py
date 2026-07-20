@@ -7,8 +7,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Observability
-    LOG_LEVEL:Literal["INFO", "ERROR", "DEBUG"] = "INFO"
+    LOG_LEVEL: Literal["INFO", "ERROR", "DEBUG"] = "INFO"
     ENVIRONMENT: Literal["dev", "local"] = "local"
+    TEMPLATE_LIVE_LEARNING: bool = False
 
     # Application
     APPLICATION_CLIENT_ID: str

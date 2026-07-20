@@ -7,7 +7,8 @@ Excel workbook and only an execution-history document in Cosmos.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -75,6 +76,9 @@ class InvoiceRecord(BaseModel):
     needs_review: bool = False
     duplicate_suspect_of: str | None = None
     llm_meta: dict[str, Any] = Field(default_factory=dict)  # called, fields, cost
+    template_id: str | None = None
+    template_score: float | None = None
+    template_verdict: str | None = None
 
     def identity_tuple(self) -> tuple:
         """Business identity for soft-duplicate detection."""
@@ -107,6 +111,7 @@ class InvoiceRecord(BaseModel):
         r["LLMUsed"] = "Y" if self.llm_meta.get("called") else "N"
         r["NeedsReview"] = "Y" if self.needs_review else "N"
         r["DuplicateSuspectOf"] = self.duplicate_suspect_of or ""
+        r["TemplateId"] = self.template_id or ""
         return r
 
 
@@ -128,3 +133,105 @@ class HistoryDoc(BaseModel):
     flags: list[str] = Field(default_factory=list)
     error: str | None = None
     timestamps: dict[str, str] = Field(default_factory=dict)
+
+
+class StaticToken(BaseModel):
+    """A stable text token in normalised page coordinates."""
+
+    text: str
+    cx: float
+    cy: float
+
+
+class TemplateFingerprint(BaseModel):
+    """Coarse and precise layout identity for one vendor layout."""
+
+    grid_bits_hex: str = "0"
+    static_tokens: list[StaticToken] = Field(default_factory=list)
+    table_col_centres: list[float] = Field(default_factory=list)
+    table_header_tokens: list[str] = Field(default_factory=list)
+    registration_anchors: list[str] = Field(default_factory=list)
+    elastic_zones: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BBoxPrior(BaseModel):
+    """Online Welford statistics for cx, cy, width, and height."""
+
+    n: int = 0
+    mean: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+    m2: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+
+    def update(self, point: list[float], weight: int = 1) -> None:
+        if len(point) != 4:
+            raise ValueError("bbox point must contain cx, cy, width, height")
+        for _ in range(max(weight, 1)):
+            self.n += 1
+            for index, value in enumerate(point):
+                delta = value - self.mean[index]
+                self.mean[index] += delta / self.n
+                self.m2[index] += delta * (value - self.mean[index])
+
+
+class ValuePattern(BaseModel):
+    regex: str | None = None
+    samples: list[str] = Field(default_factory=list)
+    active: bool = False
+    violations: int = 0
+
+
+class TemplateFieldPrior(BaseModel):
+    anchor_text: str | None = None
+    anchor_relation: str | None = None
+    bbox_prior: BBoxPrior = Field(default_factory=BBoxPrior)
+    value_pattern: ValuePattern = Field(default_factory=ValuePattern)
+    hit: int = 0
+    miss: int = 0
+    consecutive_miss: int = 0
+
+
+class TemplateStats(BaseModel):
+    instances_seen: int = 0
+    last_seen: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    created_from_eval_id: str = ""
+    health: Literal["ACTIVE", "DORMANT", "QUARANTINED"] = "QUARANTINED"
+    match_score_ewma: float = 0.0
+
+
+class TemplateDocument(BaseModel):
+    id: str
+    vendor_key: str
+    variant: int
+    fingerprint: TemplateFingerprint
+    fields: dict[str, TemplateFieldPrior] = Field(default_factory=dict)
+    validation_profile: dict[str, Any] = Field(default_factory=dict)
+    stats: TemplateStats = Field(default_factory=TemplateStats)
+    schema_version: int = 1
+
+
+class TemplateMatch(BaseModel):
+    template_id: str | None = None
+    vendor_key: str | None = None
+    score: float = 0.0
+    stage_a_score: float = 0.0
+    verdict: Literal["MATCH", "GRAY_ZONE", "NEW_VARIANT", "NO_TEMPLATE"] = "NO_TEMPLATE"
+    registration_skipped: bool = False
+
+
+class LearningObservation(BaseModel):
+    eval_id: str
+    vendor_key: str
+    confirmed: bool
+    correction_weight: int = 1
+    field_values: dict[str, Any] = Field(default_factory=dict)
+    field_polygons: dict[str, list[float]] = Field(default_factory=dict)
+
+
+class OCRSnapshot(BaseModel):
+    """JSON-safe representation of the paid DI responses for replay evals."""
+
+    invoice: dict[str, Any]
+    layout: dict[str, Any]
+    pages: int
+    cost_usd: float

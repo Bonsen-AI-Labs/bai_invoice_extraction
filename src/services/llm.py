@@ -55,15 +55,19 @@ class LLMClient:
             }
         ]
         for d in disputes:
-            content.append({
-                "type": "text",
-                "text": json.dumps({
-                    "field": d["field"],
-                    "definition": d.get("definition", ""),
-                    "candidates": d.get("candidates", []),
-                    "positionalNote": d.get("note", ""),
-                }),
-            })
+            content.append(
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "field": d["field"],
+                            "definition": d.get("definition", ""),
+                            "candidates": d.get("candidates", []),
+                            "positionalNote": d.get("note", ""),
+                        }
+                    ),
+                }
+            )
             for png in d.get("crops", []):
                 content.append(
                     {"type": "image_url", "image_url": {"url": _data_url(png)}}

@@ -1,18 +1,21 @@
 # Repository Guidelines
 
-## Project Structure & Architecture
+## Project Structure & Module Organisation
 
-Application code lives under `src/`. `src/pipeline/runner.py` orchestrates a single invoice-processing pass; `src/services/` isolates SharePoint, Excel, Cosmos DB, OCR, HTTP, and LLM integrations; `src/parsing/` and `src/extraction/` implement document interpretation; shared Pydantic types and configuration live in `src/models.py`, `src/env.py`, and `src/config.py`. Utilities are in `src/utils/`. Evaluation assets belong under `tests/evals/`.
+Application code lives under `src/`. `src/pipeline/runner.py` orchestrates processing; `src/services/` isolates external systems; `src/parsing/` and `src/extraction/` interpret documents. Shared types and configuration live in `src/models.py`, `src/env.py`, and `src/config.py`. Utilities are in `src/utils/`; eval assets are under `tests/evals/`.
 
-Use `TECHNICAL_REQUIREMENTS.md` for architectural intent and field definitions. It describes the planned multi-phase system; check `CLAUDE.md` and the code for deliberate Phase 1 deviations before expanding scope.
+Layer L6 template learning lives in `src/template_generation/`. Runtime templates are under `data/templates/`; golden expectations are in `tests/evals/golden_dataset/`. PDFs and replay caches remain under ignored `data/` paths. Use `TECHNICAL_REQUIREMENTS.md` for architectural intent and field definitions.
 
 ## Build, Test, and Development Commands
 
-- `uv sync` installs the Python 3.14 environment from `pyproject.toml` and `uv.lock`.
-- `uv run python -m src.main` runs one pipeline pass; live Azure, Microsoft Graph, and OpenAI credentials are required.
-- `uv run ruff check src` performs lint checks.
-- `uv run pyright src` performs static type checking; keep it at zero errors.
-- `uv run python -m src.utils.text` runs that module's assert-based self-check. Equivalent checks exist in `src.utils.render` and `src.extraction.client`.
+- `uv sync` installs the locked Python 3.14 environment.
+- `task lint` runs `ruff format`, `ruff check --fix`, and Pyright.
+- `task pytest` runs the deterministic test suite.
+- `task evals` refreshes live DI/LLM results, then compares baseline and templates.
+- `task train` learns candidates and evaluates them with fresh live results.
+- `uv run python -m src.main` runs a live SharePoint pass; Azure, Graph, and OpenAI credentials are required.
+
+Eval and training runs display batch and per-invoice progress. They invoke paid DI and LLM services by default and persist responses. Use `run --offline` in CI. Detailed reports under `out/evals/` contain invoice values and provenance; keep that ignored directory private.
 
 ## Coding Style & Naming Conventions
 
@@ -20,11 +23,11 @@ Use four-space indentation, explicit type annotations, and absolute imports such
 
 ## Testing Guidelines
 
-This repository currently has no pytest suite or coverage threshold. Add focused assert-based `_demo()` checks for non-trivial pure logic and run the relevant module directly. Store evaluation datasets in `tests/evals/golden_dataset/`; do not commit real invoices, secrets, generated renders, or output workbooks.
+Add pytest contracts for deterministic behaviour and keep them independent of live services. Name files `test_*.py` and tests `test_<behaviour>()`. Template learning needs three confirmed training invoices and one held-out invoice per vendor-layout group. Never promote `candidate.json` without passing held-out evals. There is no numeric coverage threshold; cover changed branches and failure modes.
 
 ## Commit & Pull Request Guidelines
 
-History follows short Conventional Commit subjects, primarily `feat:` and `chore:`. Use an imperative summary, for example `feat: validate GSTIN checksum`. Pull requests should explain the user-visible change, affected pipeline stages, configuration or schema impact, and validation commands run. Link the relevant issue or technical-design section; include sample output or screenshots only when workbook or visual behaviour changes.
+History uses Conventional Commit subjects, primarily `feat:` and `chore:`. Use an imperative summary, for example `feat: validate GSTIN checksum`. Pull requests should explain the user-visible change, affected pipeline stages, configuration or schema impact, and commands run. Link the issue or design section; include screenshots when output changes.
 
 ## Security & Configuration
 

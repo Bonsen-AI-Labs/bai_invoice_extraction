@@ -1,0 +1,30 @@
+version: "3"
+
+tasks:
+  lint:
+    desc: Format, auto-fix lint issues, and run static type checks
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check --fix .
+      - uv run pyright src tests main.py
+
+  pytest:
+    desc: Run the deterministic test suite
+    cmds:
+      - uv run pytest
+
+  evals:
+    desc: Run fresh evaluations against live DI and LLM services
+    cmds:
+      - uv run python -m tests.evals.main run
+
+  train:
+    desc: Train candidate templates and evaluate held-out cases
+    cmds:
+      - uv run python -m tests.evals.main train
+
+  visualize:
+    aliases: [visualise]
+    desc: Generate annotated invoice images in the out directory
+    cmds:
+      - uv run python -m src.utils.visualize

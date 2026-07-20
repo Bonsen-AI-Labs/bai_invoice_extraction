@@ -89,7 +89,7 @@ def parse_date(s: str) -> str | None:
 def future_beyond(iso: str, skew_days: int = 2) -> bool:
     try:
         d = date.fromisoformat(iso)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     return d > date.today() + timedelta(days=skew_days)
 

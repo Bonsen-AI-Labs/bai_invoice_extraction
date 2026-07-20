@@ -1,5 +1,4 @@
-def main():
-    print("Hello from bai-invoice-extraction!")
+from src.main import main
 
 
 if __name__ == "__main__":

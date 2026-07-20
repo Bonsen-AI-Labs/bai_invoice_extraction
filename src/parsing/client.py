@@ -180,8 +180,10 @@ def _slice(
     parsed: ParsedDocument, index: int, page_range: list[int], doc
 ) -> LogicalInvoice:
     lo, hi = page_range
+
     def in_range(pg):
         return lo <= pg <= hi
+
     lines = [ln for ln in parsed.lines if in_range(ln.page)]
     blocks = [b for b in parsed.blocks if in_range(b.page)]
     tables = (

@@ -47,9 +47,12 @@ class HTTPClient:
         # ponytail: MSAL is sync and caches internally; skew guard is enough.
         if self._token and time.time() < self._token_exp - 60:
             return self._token
-        result = self._msal.acquire_token_for_client(
-            scopes=["https://graph.microsoft.com/.default"]
-        ) or {}
+        result = (
+            self._msal.acquire_token_for_client(
+                scopes=["https://graph.microsoft.com/.default"]
+            )
+            or {}
+        )
         token = result.get("access_token")
         if not token:
             raise RuntimeError(
